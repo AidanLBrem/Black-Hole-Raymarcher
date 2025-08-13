@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Black Hole Gravitational Lensing Simulation</title>
+    
+    <!-- Basic styling -->
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #fps {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #controls input {
+            vertical-align: middle;
+        }
+    </style>
+    
+    <!-- Import map shim for browsers without native support -->
+    <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+    
+    <!-- Define external dependencies in the import map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.12.4/+esm"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="info">Black Hole Gravitational Lensing Simulation</div>
+    <div id="fps">FPS: 0</div>
+    <div id="controls">
+        <label for="radiusSlider">Black Hole Radius: <span id="radiusValue">1</span></label>
+        <input type="range" id="radiusSlider" min="1" max="100" value="1" step="0.1">
+        <br>
+        <label for="posXSlider">BH X: <span id="posXValue">0</span></label>
+        <input type="range" id="posXSlider" min="-100" max="100" value="0" step="1">
+        <br>
+        <label for="posYSlider">BH Y: <span id="posYValue">0</span></label>
+        <input type="range" id="posYSlider" min="-100" max="100" value="0" step="1">
+        <br>
+        <label for="posZSlider">BH Z: <span id="posZValue">0</span></label>
+        <input type="range" id="posZSlider" min="-100" max="100" value="0" step="1">
+        <br>
+        <button id="resetButton">Reset Black Hole Position</button>
+        <br>
+        <label>
+            <input type="checkbox" id="shaderToggle" checked>
+            Enable Gravitational Lensing
+        </label>
+        <br>
+        <label>
+            <input type="checkbox" id="debugRayBendingToggle">
+            Show Ray Bending Debug View
+        </label>
+        <br>
+        <label>
+            <input type="checkbox" id="uvDistortionToggle">
+            Show UV Distortion
+        </label>
+        <br>
+        <label>
+            <input type="checkbox" id="sphereHitDebugToggle">
+            Show Sphere Hit Debug
+        </label>
+        <br>
+        <label>
+            <input type="checkbox" id="earlyTerminationToggle" checked>
+            Enable Early Termination Optimization
+        </label>
+        <br>
+        <label for="stepCountSlider">Ray Steps: <span id="stepCountValue">50000</span></label>
+        <input type="range" id="stepCountSlider" min="100" max="50000" value="50000" step="100">
+    </div>
+    
+    <script type="module">
+        // Import dependencies
+        import * as THREE from 'three';
+        import { FlyControls } from 'three/addons/controls/FlyControls.js';
+        import { gsap } from 'gsap';
+        import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+        import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+        
+        const GRID_SIZE = 100;
+        const GRID_DIVISIONS = 20;
+        const G = 1.975813844e-32;
+        const C = 0.430467210276;
+        const solarRadius = 696340.0; // km
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100000);
+        const renderer = new THREE.WebGLRenderer({
+            canvas: document.createElement('canvas'),
+            antialias: true
+        });
+        
+        // Set up the camera and controls
+        camera.position.set(0, 0, 100);
+        const controls = new FlyControls(camera, renderer.domElement);
+        
+        // Configure FlyControls
+        controls.movementSpeed = 50;      // Movement speed
+        controls.rollSpeed = Math.PI / 6; // Roll speed
+        controls.autoForward = false;     // Don't auto-move forward
+        controls.dragToLook = false;      // Use mouse to look around without dragging
+        
+        // Add the canvas to the page
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+        
+        const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+        renderTarget.depthTexture = new THREE.DepthTexture();
+        renderTarget.depthTexture.type = THREE.UnsignedShortType;
+        const quadScene = new THREE.Scene();
+        const quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+        const quadGeometry = new THREE.PlaneGeometry(2, 2);
+        
+
+        // Create UI controls
+        const radiusSlider = document.getElementById('radiusSlider');
+        const radiusValue = document.getElementById('radiusValue');
+        const posXSlider = document.getElementById('posXSlider');
+        const posXValue = document.getElementById('posXValue');
+        const posYSlider = document.getElementById('posYSlider');
+        const posYValue = document.getElementById('posYValue');
+        const posZSlider = document.getElementById('posZSlider');
+        const posZValue = document.getElementById('posZValue');
+        const resetButton = document.getElementById('resetButton');
+        const shaderToggle = document.getElementById('shaderToggle');
+        const debugRayBendingToggle = document.getElementById('debugRayBendingToggle');
+        const uvDistortionToggle = document.getElementById('uvDistortionToggle');
+        const sphereHitDebugToggle = document.getElementById('sphereHitDebugToggle');
+        const earlyTerminationToggle = document.getElementById('earlyTerminationToggle');
+        const stepCountSlider = document.getElementById('stepCountSlider');
+        const stepCountValue = document.getElementById('stepCountValue');
+        const fpsElement = document.getElementById('fps');
+        
+        // FPS tracking
+        let frameCount = 0;
+        let lastTime = performance.now();
+        let fps = 0;
+        
+        // Create the black hole
+        let blackHoleRadius = radiusSlider.value;
+        let blackHoleMass = calculateBlackHoleMass(blackHoleRadius);
+        const blackHoleGeometry = new THREE.SphereGeometry(2, 32, 32);
+        const postProcessingMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                blackHolePosition: { value: new THREE.Vector3(0, 0, 0) },
+                blackHoleRadius: { value: blackHoleRadius },
+                cameraNear: { value: camera.near },
+                cameraFar: { value: camera.far },
+                PlayerCameraPosition: { value: camera.position },
+                inverseProjectionMatrix: { value: new THREE.Matrix4() },
+                inverseViewMatrix: { value: new THREE.Matrix4() },
+                tDepth: { value: renderTarget.depthTexture },
+                tDiffuse: { value: null },
+                numMarchingPoints: { value: parseInt(stepCountSlider.value) },
+                gravitationalConstant: { value: 0.15 },
+                projectionMatrix: { value: new THREE.Matrix4() },
+                viewMatrix: { value: new THREE.Matrix4() },
+                blackHoleMass: { value: blackHoleMass },
+                enabled: { value: true },
+                showRayBendingDebug: { value: false },
+                showUVDistortionDebug: { value: false },
+                showSphereHitDebug: { value: false },
+                enableEarlyTermination: { value: true },
+                spherePositions: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
+                sphereRadii: { value: [1.0, 1.0, 1.0, 1.0] },
+                planePosition: { value: new THREE.Vector3(0, -50, 0) },
+                planeNormal: { value: new THREE.Vector3(0, 1, 0) },
+                sphereColors: { value: [new THREE.Vector3(1.0, 0.0, 0.0), new THREE.Vector3(0.0, 1.0, 0.0), new THREE.Vector3(0.0, 0.0, 1.0), new THREE.Vector3(1.0, 1.0, 0.0)] },
+            },
+            vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = vec4(position, 1.0);
+            }
+            `,
+            fragmentShader: `
+            varying vec2 vUv;
+            uniform vec3 PlayerCameraPosition;
+            uniform mat4 inverseProjectionMatrix;
+            uniform mat4 inverseViewMatrix;
+            uniform vec3 blackHolePosition;
+            uniform float blackHoleRadius;
+            uniform float cameraNear;
+            uniform float cameraFar;
+            uniform sampler2D tDepth;
+            uniform sampler2D tDiffuse;
+            uniform int numMarchingPoints;
+            uniform float gravitationalConstant;    
+            uniform mat4 projectionMatrix;
+            uniform float blackHoleMass;
+            uniform bool enabled;
+            uniform bool showRayBendingDebug;
+            uniform bool showUVDistortionDebug;
+            uniform bool showSphereHitDebug;
+            uniform bool enableEarlyTermination;
+            uniform vec3 spherePositions[4];
+            uniform float sphereRadii[4];
+            uniform vec3 sphereColors[4];
+            uniform vec3 planePosition;
+            uniform vec3 planeNormal;
+            //All units are in SR
+            const float G = 1.975813844e-32;
+            const float C = 0.430467210276;
+            const float MARCH_DIST = 10000.0;
+
+                vec2 raySphere(vec3 sphereCenter, float sphereRadius, vec3 rayOrigin, vec3 rayDirection) {
+                    vec3 offset = rayOrigin - sphereCenter; //distance from ray start to center
+                    float a = 1.0;
+                    float b = 2.0 * dot(offset, rayDirection);
+                    float c = dot (offset, offset) - sphereRadius * sphereRadius;
+                    float d = b * b - 4.0 * a * c; //discriminant
+                    if (d > 0.0) { //if we collide with the shpere
+                        float s = sqrt(d);
+                        float dstToSphereNear = max(0.0, (-b - s) / (2.0 * a)); //nearest solution
+                        float dstToSphereFar = (-b + s) / (2.0 * a); //farthest solution
+                        if (dstToSphereFar >= 0.0) {
+                            return vec2(dstToSphereNear, dstToSphereFar - dstToSphereNear);
+                        }
+                    }
+                    return vec2(1e5, 1e5);
+                }
+
+            float rayPlane(vec3 planePoint, vec3 planeNormal, vec3 rayOrigin, vec3 rayDirection) {
+                float denom = dot(planeNormal, rayDirection);
+                if (abs(denom) > 0.0001) { // Ray is not parallel to plane
+                    vec3 p0l0 = planePoint - rayOrigin;
+                    float t = dot(p0l0, planeNormal) / denom;
+                    return t >= 0.0 ? t : -1.0; // Return distance if positive, -1 if behind ray
+                }
+                return -1.0; // Ray is parallel to plane
+            }
+
+            vec3 getCheckerboardColor(vec3 worldPos) {
+                vec2 gridPos = worldPos.xz * 0.05; // Adjust scale as needed
+                vec2 grid = floor(gridPos);
+                float checker = mod(grid.x + grid.y, 2.0);
+                return mix(vec3(0.8, 0.8, 0.8), vec3(0.2, 0.2, 0.2), checker);
+            }
+
+            int checkCollisions(vec3 rayOrigin, vec3 rayDirection, float maxDistance, out float hitDistance, out vec3 hitColor) {
+                hitDistance = maxDistance;
+                int hit = 0;
+                
+                // Check collision with spheres
+                for (int i = 0; i < 4; i++) {
+                    vec2 sphereHit = raySphere(spherePositions[i], sphereRadii[i], rayOrigin, rayDirection);
+                    if (sphereHit.x < hitDistance && sphereHit.x > 0.001) {
+                        hitDistance = sphereHit.x;
+                        hit = 1;
+                        hitColor = sphereColors[i];
+                    }
+                }
+                
+                // Check collision with plane
+                float planeHit = rayPlane(planePosition, planeNormal, rayOrigin, rayDirection);
+                if (planeHit > 0.001 && planeHit < hitDistance) {
+                    hitDistance = planeHit;
+                    hit = 2;
+                    hitColor = getCheckerboardColor(rayOrigin + rayDirection * hitDistance);
+                }
+                
+                return hit;
+            }
+
+            float linearizeDepth(float d) {
+                float z = d * 2.0 - 1.0;
+                return (2.0 * cameraNear * cameraFar) / (cameraFar + cameraNear - z * (cameraFar - cameraNear));
+            }            
+
+            vec3 getRayDir(vec2 uv) {
+                vec2 ndc = uv * 2.0 - 1.0;
+
+                vec4 clip = vec4(ndc, -1.0, 1.0);
+
+                vec4 eye = inverseProjectionMatrix * clip;
+                eye.z = -1.0; 
+                eye.w = 0.0;
+                vec4 worldDir4 = inverseViewMatrix * eye;
+                return normalize(worldDir4.xyz);
+            }
+
+            float hash(vec3 p) {
+                return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+            }
+
+            vec3 getStarField(vec3 rayDirection) {
+                vec3 normalizedDir = normalize(rayDirection);
+                
+                // Create multiple layers of stars at different scales
+                float star1 = hash(floor(normalizedDir * 100.0));
+                float star2 = hash(floor(normalizedDir * 200.0));
+                float star3 = hash(floor(normalizedDir * 500.0));
+                
+                // Different star densities and brightnesses
+                float bigStars = smoothstep(0.997, 0.999, star1) * 1.0;
+                float mediumStars = smoothstep(0.993, 0.997, star2) * 0.8;
+                float smallStars = smoothstep(0.990, 0.995, star3) * 0.6;
+                
+                float totalStars = bigStars + mediumStars + smallStars;
+                
+                // Enhanced color variation with multiple hash values
+                vec3 starColor = vec3(1.0);
+                if (totalStars > 0.0) {
+                    // Use different seeds for color components with more spread
+                    float colorSeed1 = hash(normalizedDir * 123.456);
+                    float colorSeed2 = hash(normalizedDir * 789.012);
+                    float colorSeed3 = hash(normalizedDir * 345.678);
+                    
+                    // More dramatic color variations
+                    starColor = vec3(1.0); // Start with white
+                    
+                    // Apply distinct star type colors
+                    if (colorSeed1 > 0.9) {
+                        starColor = vec3(1.0, 0.4, 0.2); // Red giants - very red
+                    } else if (colorSeed1 > 0.8) {
+                        starColor = vec3(1.0, 0.6, 0.3); // Orange stars
+                    } else if (colorSeed1 > 0.7) {
+                        starColor = vec3(1.0, 0.9, 0.7); // Yellow stars
+                    } else if (colorSeed1 > 0.6) {
+                        starColor = vec3(0.9, 0.95, 1.0); // White stars
+                    } else if (colorSeed1 > 0.5) {
+                        starColor = vec3(0.7, 0.8, 1.0); // Blue-white stars
+                    } else if (colorSeed1 > 0.4) {
+                        starColor = vec3(0.5, 0.7, 1.0); // Blue stars
+                    } else {
+                        // Add some subtle variation to remaining white stars
+                        float redVar = 0.9 + 0.2 * colorSeed2;
+                        float greenVar = 0.9 + 0.2 * colorSeed3;
+                        float blueVar = 0.9 + 0.2 * hash(normalizedDir * 456.789);
+                        starColor = vec3(redVar, greenVar, blueVar);
+                    }
+                }
+                
+                return starColor * totalStars;
+            }    
+
+                
+            //Draw rays from camera, bend the rays based on gravitational lensing, then sample the scene. If the UV you're sampling is inside the black hole, don't accumulate color.
+            void main() {
+                float sceneDepthNonLinear = texture2D(tDepth, vUv).r;
+                vec4 original = texture2D(tDiffuse, vUv);
+                float sceneDepthLinear = linearizeDepth(sceneDepthNonLinear);
+
+                vec3 rayOrigin = PlayerCameraPosition; //now in SR
+                vec3 rayDirection = normalize(getRayDir(vUv));
+                vec3 bhPosition = blackHolePosition; //now in SR
+                float marchStart = cameraNear + 0.01;
+                float marchEnd = min(cameraFar, sceneDepthLinear);
+
+                float marchStepSize = (MARCH_DIST) / float(numMarchingPoints); // in SR
+                if (!enabled) {
+                    marchStepSize = (marchEnd - marchStart) / float(numMarchingPoints);
+                }
+                vec4 finalColor = original;
+                vec4 accumulatedColor = vec4(0.0, 0.0, 0.0, 0.0);
+                int numSamples = 0;
+
+                vec3 currentPoint = rayOrigin; //in SR
+                vec3 currentRayDirection = rayDirection; //in SR
+                bool hitBlackHole = false;
+                vec3 initialRayDirection = rayDirection; //in SR
+                float totalDeltaTheta = 0.0;
+                //cache this for some speed up
+                float totalDistance = 0.0;
+                bool hitOpaqueObject = false;
+                bool hitSphere = false;
+                bool hitPlane = false;
+                
+                // Early termination optimization variables
+                float lastDistanceToBlackHole = length(bhPosition - currentPoint);
+                vec3 directionSample50StepsAgo = currentRayDirection;
+                int stepsMovingAway = 0;
+                const int DIRECTION_SAMPLE_INTERVAL = 50;
+                const float MIN_DIRECTION_CHANGE = 0.01; // Minimum meaningful direction change
+                const int MIN_STEPS_AWAY = 3; // Require several steps moving away before considering termination
+                
+                for (int i = 0; i < numMarchingPoints; i++) {
+                    vec3 directionToBlackHoleCenter = bhPosition - currentPoint; //in SR
+                    float distanceToBlackHoleCenter = length(directionToBlackHoleCenter); //in SR
+
+                    //check if ray is inside black hole
+                    vec2 sphereHit = raySphere(bhPosition, blackHoleRadius, currentPoint, currentRayDirection);
+                    if (sphereHit.x < marchStepSize) {
+                        hitBlackHole = true;
+                        break;
+                    }
+
+                    // Check for collisions with scene objects
+
+
+                    if (enabled) {
+                        directionToBlackHoleCenter /= distanceToBlackHoleCenter;
+                        // Relativistic light bending equation
+                        float acceleration = (2.0 * G * blackHoleMass) / (C * C * distanceToBlackHoleCenter * distanceToBlackHoleCenter);
+                        vec3 accelerationVector = acceleration * directionToBlackHoleCenter * marchStepSize;
+                        currentRayDirection = normalize(currentRayDirection + accelerationVector);
+                    }
+
+                    currentPoint += currentRayDirection * marchStepSize;
+                    totalDistance += marchStepSize;
+                    // Project current point back to screen space
+                    float collisionDistance;
+                    vec3 hitColor;
+                    int hit = checkCollisions(currentPoint, currentRayDirection, marchStepSize, collisionDistance, hitColor);
+                    if (hit != 0) {
+                        if (collisionDistance < marchStepSize) {
+                            hitOpaqueObject = true;
+                            if (hit == 1) {
+                                 hitSphere = true;
+                            }
+                            if (hit == 2) {
+                                 hitPlane = true;
+                            }
+                            accumulatedColor += vec4(hitColor, 1.0);
+                            numSamples++;
+                            break;
+                        }
+                    }                            
+
+                    // Early termination optimization logic
+                    float currentDistanceToBlackHole = length(bhPosition - currentPoint);
+                    if (currentDistanceToBlackHole > lastDistanceToBlackHole) {
+                        stepsMovingAway++;
+                    } else {
+                        stepsMovingAway = 0; // Reset if we're not consistently moving away
+                    }
+                    
+                    // Check direction change every DIRECTION_SAMPLE_INTERVAL steps
+                    if (i % DIRECTION_SAMPLE_INTERVAL == 0 && i > 0) {
+                        float directionChange = length(currentRayDirection - directionSample50StepsAgo);
+                        directionSample50StepsAgo = currentRayDirection;
+                        
+                        // Early termination: moving away + direction stable + far enough + enough steps
+                        if (enableEarlyTermination && 
+                            stepsMovingAway >= MIN_STEPS_AWAY && 
+                            directionChange < MIN_DIRECTION_CHANGE && 
+                            currentDistanceToBlackHole > blackHoleRadius * 10.0 && i > 100) {
+                            
+                            break; // Ray is stable and moving away, terminate after collision check
+                        }
+                    }
+                    
+                    lastDistanceToBlackHole = currentDistanceToBlackHole;
+                }
+                
+                if (numSamples > 0) {
+                    finalColor = accumulatedColor / float(numSamples);
+                }
+                else {
+                    bool rayPointingDown = currentRayDirection.y < -0.1; // Toward plane
+                    if (rayPointingDown) {
+                        float remainingDistance = MARCH_DIST - totalDistance;
+                        float finalCollisionDistance;
+                        vec3 finalHitColor;
+                        float maxCollisionDistance = min(MARCH_DIST - totalDistance, 5000.0);
+                        float planeHit = rayPlane(planePosition, planeNormal, currentPoint, currentRayDirection);
+                        if (planeHit > 0.001 && planeHit < maxCollisionDistance) {
+                            hitPlane = true;
+                            finalColor = vec4(getCheckerboardColor(currentPoint + currentRayDirection * planeHit), 1.0);
+                            hitPlane = true;
+                        }
+                        
+                        else {
+                            vec3 starColor = getStarField(currentRayDirection);
+                            finalColor = vec4(starColor, 1.0);
+                        }
+
+                    }                
+
+                    else {
+                        vec3 starColor = getStarField(currentRayDirection);
+                        finalColor = vec4(starColor, 1.0);
+                    }
+
+                }
+                    
+                gl_FragColor = finalColor;
+
+                if (hitBlackHole) {
+                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+
+                if (hitSphere && showSphereHitDebug) {
+                    gl_FragColor = vec4(0.0, 1.0, 1.0, 1.0);
+                }
+
+                if (hitPlane && showSphereHitDebug) {
+                    gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
+                }
+
+                if (showSphereHitDebug && !hitPlane && !hitSphere && !hitBlackHole) {
+                    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+                }
+                //should NEVER HAPPEN
+                if (hitSphere && hitPlane && showSphereHitDebug) {
+                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                }
+
+                // Only show angle visualization if debug toggle is enabled
+                if (showRayBendingDebug) {
+                    if (hitBlackHole) {
+                        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                        return;
+                    }
+                    float angleDif = acos(clamp(dot(initialRayDirection, currentRayDirection), -1.0, 1.0));
+                    float normalizedAngle = clamp(angleDif / 3.14159265, 0.0, 1.0);
+                    gl_FragColor = vec4(normalizedAngle, 0.0, 0.0, 1.0);
+                }
+
+
+
+            }
+            `
+        });
+
+        const quad = new THREE.Mesh(quadGeometry, postProcessingMaterial);
+        quadScene.add(quad);
+
+
+        const blackHole = new THREE.Mesh(blackHoleGeometry);
+        blackHole.position.set(0, 0, 0);
+        blackHole.visible = false;
+        scene.add(blackHole);
+
+        // Add orbiting spheres
+        const sphereGeometry = new THREE.SphereGeometry(1, 16, 16);
+        const spheres = [];
+        const sphereColors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00]; // Red, Green, Blue, Yellow
+        const sphereCount = 4;
+        const orbitRadius = 20;
+
+        for (let i = 0; i < sphereCount; i++) {
+            const material = new THREE.MeshBasicMaterial({ color: sphereColors[i] });
+            const sphere = new THREE.Mesh(sphereGeometry, material);
+            const angle = (i / sphereCount) * Math.PI * 2;
+            sphere.position.set(
+                Math.cos(angle) * orbitRadius,
+                0,
+                Math.sin(angle) * orbitRadius
+            );
+            scene.add(sphere);
+            spheres.push({
+                mesh: sphere,
+                angle: angle,
+                speed: 0.2 + Math.random() * 0.1 // Random speed between 0.2 and 0.3
+            });
+        }
+
+        // Create stars for background
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 5000;
+        const starPositions = new Float32Array(starCount * 3);
+        const starRadius = 10000;
+        for (let i = 0; i < starCount; i++) {
+            // Create stars in a sphere around the scene
+            const radius = starRadius + Math.random() * starRadius;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            
+            
+            // Calculate positions
+            starPositions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+            starPositions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+            starPositions[i * 3 + 2] = radius * Math.cos(phi);
+        }
+        
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.5,
+            sizeAttenuation: false
+        });
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+        
+        
+        // Set up UI control event listeners
+        radiusSlider.addEventListener('input', () => {
+            blackHoleRadius = parseFloat(radiusSlider.value);
+            blackHoleMass = calculateBlackHoleMass(blackHoleRadius);
+            radiusValue.textContent = blackHoleRadius.toFixed(1);
+            postProcessingMaterial.uniforms.blackHoleRadius.value = blackHoleRadius;
+            postProcessingMaterial.uniforms.blackHoleMass.value = blackHoleMass;
+        
+        });
+        
+        posXSlider.addEventListener('input', () => {
+            blackHole.position.x = parseFloat(posXSlider.value);
+            posXValue.textContent = blackHole.position.x;
+            postProcessingMaterial.uniforms.blackHolePosition.value.copy(blackHole.position);
+        });
+
+        posYSlider.addEventListener('input', () => {
+            blackHole.position.y = parseFloat(posYSlider.value);
+            posYValue.textContent = blackHole.position.y;
+            postProcessingMaterial.uniforms.blackHolePosition.value.copy(blackHole.position);
+        });
+
+        posZSlider.addEventListener('input', () => {
+            blackHole.position.z = parseFloat(posZSlider.value);
+            posZValue.textContent = blackHole.position.z;
+            postProcessingMaterial.uniforms.blackHolePosition.value.copy(blackHole.position);
+        });
+        
+        resetButton.addEventListener('click', () => {
+            gsap.to(blackHole.position, {
+                duration: 1,
+                x: 0,
+                y: 0,
+                z: 0,
+                ease: "power2.inOut",
+                onUpdate: () => {
+                    posXSlider.value = blackHole.position.x;
+                    posXValue.textContent = blackHole.position.x.toFixed(0);
+                    posYSlider.value = blackHole.position.y;
+                    posYValue.textContent = blackHole.position.y.toFixed(0);
+                    posZSlider.value = blackHole.position.z;
+                    posZValue.textContent = blackHole.position.z.toFixed(0);
+                    postProcessingMaterial.uniforms.blackHolePosition.value.copy(blackHole.position);
+                }
+            });
+
+            posXSlider.value = 0;
+            posXValue.textContent = 0;
+            posYSlider.value = 0;
+            posYValue.textContent = 0;
+            posZSlider.value = 0;
+            posZValue.textContent = 0;
+        });
+        
+        shaderToggle.addEventListener('change', () => {
+            postProcessingMaterial.uniforms.enabled.value = shaderToggle.checked;
+        });
+        
+        debugRayBendingToggle.addEventListener('change', () => {
+            postProcessingMaterial.uniforms.showRayBendingDebug.value = debugRayBendingToggle.checked;
+        });
+        
+        uvDistortionToggle.addEventListener('change', () => {
+            postProcessingMaterial.uniforms.showUVDistortionDebug.value = uvDistortionToggle.checked;
+        });
+        
+        sphereHitDebugToggle.addEventListener('change', () => {
+            postProcessingMaterial.uniforms.showSphereHitDebug.value = sphereHitDebugToggle.checked;
+        });
+        
+        earlyTerminationToggle.addEventListener('change', () => {
+            postProcessingMaterial.uniforms.enableEarlyTermination.value = earlyTerminationToggle.checked;
+        });
+        
+        stepCountSlider.addEventListener('input', () => {
+            const steps = parseInt(stepCountSlider.value);
+            stepCountValue.textContent = steps;
+            postProcessingMaterial.uniforms.numMarchingPoints.value = steps;
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            matricesDirty = true; // Force matrix recalculation on resize
+        });
+        
+        // Matrix cache to avoid expensive operations every frame
+        let cachedCameraPosition = new THREE.Vector3();
+        let cachedCameraQuaternion = new THREE.Quaternion();
+        let cachedProjectionMatrix = new THREE.Matrix4();
+        let cachedInverseProjectionMatrix = new THREE.Matrix4();
+        let cachedViewMatrix = new THREE.Matrix4();
+        let cachedInverseViewMatrix = new THREE.Matrix4();
+        let matricesDirty = true;
+        
+        function updateMatrixCache() {
+            // Only recalculate if camera changed
+            if (!camera.position.equals(cachedCameraPosition) || 
+                !camera.quaternion.equals(cachedCameraQuaternion) ||
+                matricesDirty) {
+                
+                cachedCameraPosition.copy(camera.position);
+                cachedCameraQuaternion.copy(camera.quaternion);
+                
+                // Cache the expensive calculations
+                cachedProjectionMatrix.copy(camera.projectionMatrix);
+                cachedInverseProjectionMatrix.copy(camera.projectionMatrix).invert();
+                cachedViewMatrix.copy(camera.matrixWorldInverse);
+                cachedInverseViewMatrix.copy(camera.matrixWorld);
+                
+                matricesDirty = false;
+            }
+        }
+        
+        // Animation loop
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            controls.update(delta);
+            camera.updateMatrixWorld(true);
+            camera.updateProjectionMatrix();
+
+            // Update checkerboard time uniform
+            //checkerboardMaterial.uniforms.time.value += 0.01;
+
+            // Update orbiting spheres
+            spheres.forEach((sphere, index) => {
+                sphere.angle += sphere.speed * 0.01;
+                sphere.mesh.position.x = Math.cos(sphere.angle) * orbitRadius;
+                sphere.mesh.position.z = Math.sin(sphere.angle) * orbitRadius;
+                
+                // Update shader uniforms with sphere positions
+                postProcessingMaterial.uniforms.spherePositions.value[index].copy(sphere.mesh.position);
+            });
+
+            // Update plane position in shader
+            //postProcessingMaterial.uniforms.planePosition.value.copy(checkerboard.position);
+
+            renderer.setRenderTarget(renderTarget);
+            renderer.clear();
+            renderer.render(scene, camera);
+            renderer.setRenderTarget(null);
+            postProcessingMaterial.uniforms.tDiffuse.value = renderTarget.texture;
+            postProcessingMaterial.uniforms.PlayerCameraPosition.value.copy(camera.position);
+            
+            // Use cached matrices instead of expensive calculations
+            updateMatrixCache();
+            postProcessingMaterial.uniforms.inverseProjectionMatrix.value.copy(cachedInverseProjectionMatrix);
+            postProcessingMaterial.uniforms.inverseViewMatrix.value.copy(cachedInverseViewMatrix);
+            postProcessingMaterial.uniforms.projectionMatrix.value.copy(cachedProjectionMatrix);
+            postProcessingMaterial.uniforms.viewMatrix.value.copy(cachedViewMatrix);
+
+            postProcessingMaterial.uniforms.cameraNear.value = camera.near;
+            postProcessingMaterial.uniforms.cameraFar.value = camera.far;
+
+            renderer.render(quadScene, quadCamera);
+
+            // FPS tracking
+            frameCount++;
+            const currentTime = performance.now();
+            const elapsedTime = currentTime - lastTime;
+            if (elapsedTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = currentTime;
+                fpsElement.textContent = `FPS: ${fps}`;
+            }
+        }
+        
+        function calculateBlackHoleMass(radius) {
+            const blackHoleMass = (radius * C * C) / (2 * G);
+            return blackHoleMass;
+        }
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>
